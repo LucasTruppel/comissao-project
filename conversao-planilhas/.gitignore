@@ -1,0 +1,35 @@
+# --- Segredos ---
+.env
+.env.*
+
+# --- Banco de Dados ---
+mysql_data/
+
+# --- Python ---
+# Bytecode compilado e cache
+app/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Pastas de ambiente virtual (virtual environment)
+venv/
+.venv/
+env/
+virtualenv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Metadados de pacotes
+*.egg-info/
+.eggs/
+
+# --- Planilhas ---
+resources/populadas/
+resources/convertidas/
+
+# --- IDEs e Editores ---
+.idea/
+.vscode/
+*.swp
+*.swo

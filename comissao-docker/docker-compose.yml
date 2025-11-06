@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  db:
+    image: mysql:8.0
+    
+    container_name: mysql_db
+    
+    restart: unless-stopped
+    
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+    
+    ports:
+      - "${MYSQL_PORT}:3306"
+    
+    volumes:
+      - ./mysql_data:/var/lib/mysql
+      - ./fastapi_db_dump.sql:/docker-entrypoint-initdb.d/fastapi_db_dump.sql
+    
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+
+  api:
+    build:
+      context: ../conversao-planilhas
+      dockerfile: Dockerfile
+    
+    container_name: fastapi_openapi_server
+    
+    restart: unless-stopped
+    
+    ports:
+      - "${API_PORT:-8000}:8000"
+    
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      SECRET_KEY: ${SECRET_KEY}
+      ALGORITHM: ${ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+      ADMIN_TOKEN: ${ADMIN_TOKEN}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
+    
+    depends_on:
+      db:
+        condition: service_healthy
+    
+    volumes:
+      - ../conversao-planilhas/app:/app/app
+    
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+
+  frontend:
+    build:
+      context: ../comissao-front
+      dockerfile: Dockerfile
+    
+    container_name: comissao_frontend
+    
+    restart: unless-stopped
+    
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+    
+    depends_on:
+      - api
+    
+    volumes:
+      - ../comissao-front/src:/app/src
+      - ../comissao-front/public:/app/public
+      - ../comissao-front/index.html:/app/index.html
+      - ../comissao-front/vite.config.ts:/app/vite.config.ts
+      - ../comissao-front/tsconfig.json:/app/tsconfig.json
+      - ../comissao-front/tsconfig.app.json:/app/tsconfig.app.json
+      - ../comissao-front/tsconfig.node.json:/app/tsconfig.node.json
+      - ../comissao-front/package.json:/app/package.json
+      - /app/node_modules
+    

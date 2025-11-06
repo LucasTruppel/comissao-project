@@ -1,0 +1,10 @@
+fastapi[all]
+sqlalchemy
+asyncmy
+pydantic-settings
+python-jose[cryptography]
+passlib[bcrypt]
+python-multipart
+bcrypt==3.2.2
+unidecode
+openpyxl
