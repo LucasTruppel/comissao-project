@@ -11,7 +11,8 @@ from .routers import auth, agentes, localidades, conversores
 # --- Configuração ---
 app = FastAPI(
     title="API de Conversão de Planilhas",
-    description="Processa planilhas de remuneração e as converte para o formato base."
+    description="Processa planilhas de remuneração e as converte para o formato base.",
+    root_path="/api-comissao"
 )
 
 # Configuração CORS
