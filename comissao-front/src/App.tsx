@@ -11,15 +11,24 @@ function Navigation() {
   const location = useLocation();
   const { user, logout, isAuthenticated } = useAuth();
 
-  const isActive = (path: string) => {
-    return location.pathname === path ? 'active' : '';
-  };
+  const baseUrl = import.meta.env.BASE_URL.endsWith('/')
+    ? import.meta.env.BASE_URL.slice(0, -1)
+    : import.meta.env.BASE_URL;
+
+  const currentPath =
+    baseUrl && location.pathname.startsWith(baseUrl)
+      ? location.pathname.slice(baseUrl.length) || '/'
+      : location.pathname;
+
+  const isActive = (path: string) => (currentPath === path ? 'active' : '');
+
+  const logoSrc = `${import.meta.env.BASE_URL}logo.png`;
 
   return (
     <nav className="navbar">
       <div className="nav-container">
         <div className="nav-brand">
-          <img src="/logo.png" alt="Logo" className="nav-logo" />
+          <img src={logoSrc} alt="Logo" className="nav-logo" />
           <h1 className="nav-title">Comissão</h1>
         </div>
         {isAuthenticated && (
@@ -79,7 +88,7 @@ function LoginRoute() {
 
 function App() {
   return (
-    <Router>
+    <Router basename={import.meta.env.BASE_URL}>
       <div className="app">
         <Navigation />
         <main className="main-content">

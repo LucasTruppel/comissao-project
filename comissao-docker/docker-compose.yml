@@ -52,6 +52,7 @@ services:
     
     volumes:
       - ../conversao-planilhas/app:/app/app
+      - ../conversao-planilhas/resources:/app/app/resources
     
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
@@ -60,6 +61,8 @@ services:
     build:
       context: ../comissao-front
       dockerfile: Dockerfile
+      args:
+        - VITE_API_BASE_URL=${VITE_API_BASE_URL:-http://localhost:8000}
     
     container_name: comissao_frontend
     
@@ -73,15 +76,4 @@ services:
     
     depends_on:
       - api
-    
-    volumes:
-      - ../comissao-front/src:/app/src
-      - ../comissao-front/public:/app/public
-      - ../comissao-front/index.html:/app/index.html
-      - ../comissao-front/vite.config.ts:/app/vite.config.ts
-      - ../comissao-front/tsconfig.json:/app/tsconfig.json
-      - ../comissao-front/tsconfig.app.json:/app/tsconfig.app.json
-      - ../comissao-front/tsconfig.node.json:/app/tsconfig.node.json
-      - ../comissao-front/package.json:/app/package.json
-      - /app/node_modules
     
