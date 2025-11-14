@@ -218,6 +218,8 @@ async def converter_tecd(
         for col_info in tecd_columns:
             found = False
             for cell in ws_data[1]:
+                if cell.value is None:
+                    continue
                 if is_name_matching(col_info, cell.value):
                     column_map[col_info.index] = cell.column
                     found = True
@@ -283,6 +285,8 @@ async def converter_tecd(
         raise e
     except Exception as e:
         print(f"Ocorreu um erro inesperado: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
             status_code=500, 
             detail=f"Ocorreu um erro inesperado ao processar o arquivo: {str(e)}"
