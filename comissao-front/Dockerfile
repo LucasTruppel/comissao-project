@@ -2,7 +2,7 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-ARG VITE_API_BASE_URL=http://localhost:8000
+ARG VITE_API_BASE_URL=address_not_set
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 RUN echo "VITE_API_BASE_URL=${VITE_API_BASE_URL}"
 
