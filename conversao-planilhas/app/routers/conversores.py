@@ -1,6 +1,7 @@
 # routers/conversores.py
 import openpyxl
 import io
+from typing import Optional
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from starlette.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -55,6 +56,107 @@ TECD_BASE_FILE_PATH = find_resource_file("Valid-Tec-D.xlsx")
 TECD_PRECO_FIXO = 17
 
 
+def normalize_header(header: str) -> str:
+    """Normaliza header removendo acentos, convertendo para lowercase, 
+    tratando underscores e espaços como equivalentes."""
+    normalized = unidecode(str(header)).lower().strip()
+    normalized = normalized.replace("_", " ")
+    while "  " in normalized:
+        normalized = normalized.replace("  ", " ")
+    return normalized.strip()
+
+
+class RemuneracaoColumnInfo:
+    def __init__(self, name: str, alternative_names: list[str]):
+        self.name = name
+        self.alternative_names = alternative_names
+
+remuneracao_columns = [
+    RemuneracaoColumnInfo("PEDIDO", []),
+    RemuneracaoColumnInfo("SOLICITACAO", []),
+    RemuneracaoColumnInfo("SKU", []),
+    RemuneracaoColumnInfo("PRODUTO", []),
+    RemuneracaoColumnInfo("TITULAR", []),
+    RemuneracaoColumnInfo("CPF", []),
+    RemuneracaoColumnInfo("EMAIL", []),
+    RemuneracaoColumnInfo("CNPJ", []),
+    RemuneracaoColumnInfo("RAZAO_SOCIAL", []),
+    RemuneracaoColumnInfo("PONTO_CODIGO", ["Código Localidade"]),
+    RemuneracaoColumnInfo("PONTO_ATENDIMENTO", ["Localidade Atendimento"]),
+    RemuneracaoColumnInfo("NOME_AGENTE", ["Nome Agente Validação"]),
+    RemuneracaoColumnInfo("CPF_AGENTE", ["CPF Agente Validação"]),
+    RemuneracaoColumnInfo("DATA_1A_VERIFICACAO", ["Data Primeira Verificação"]),
+    RemuneracaoColumnInfo("CODIGO_ORIGEM", []),
+    RemuneracaoColumnInfo("NOME_ORIGEM", []),
+    RemuneracaoColumnInfo("SERIAL_CERTIFICADO", []),
+    RemuneracaoColumnInfo("DATA_EMISSAO", []),
+    RemuneracaoColumnInfo("DATA_EXPIRACAO", []),
+    RemuneracaoColumnInfo("DATA_REVOGACAO", []),
+    RemuneracaoColumnInfo("DATA_HORA_1A_VERIFICACAO", ["Data Hora Primeira Verificação"]),
+    RemuneracaoColumnInfo("DATA_ULTIMO_STATUS", []),
+    RemuneracaoColumnInfo("ULTIMO_STATUS", []),
+    RemuneracaoColumnInfo("CIDADE", ["Cidade Validação"]),
+    RemuneracaoColumnInfo("ESTADO", ["Estado Validação"]),
+    RemuneracaoColumnInfo("AR", []),
+    RemuneracaoColumnInfo("TICKET_ANTERIOR", []),
+    RemuneracaoColumnInfo("PRECO", []),
+    RemuneracaoColumnInfo("DATA_VENDA", ["Data de Venda"]),
+    RemuneracaoColumnInfo("PRECO BASE", []),
+    RemuneracaoColumnInfo("% REM", []),
+    RemuneracaoColumnInfo("R$ BIO", ["BIO"]),
+    RemuneracaoColumnInfo("TOTAL R$", []),
+    RemuneracaoColumnInfo("VOUCHER", []),
+]
+
+
+def is_remuneracao_name_matching(col_info: RemuneracaoColumnInfo, header_name: str) -> bool:
+    """Verifica se um header corresponde a uma coluna de remuneração, incluindo nomes alternativos."""
+    normalized_header = normalize_header(header_name)
+    normalized_col_name = normalize_header(col_info.name)
+    
+    if normalized_header == normalized_col_name:
+        return True
+    
+    for alt_name in col_info.alternative_names:
+        normalized_alt = normalize_header(alt_name)
+        if normalized_header == normalized_alt:
+            return True
+    
+    return False
+
+
+def find_data_column_for_base_column(
+    base_col_name: str,
+    col_info: Optional[RemuneracaoColumnInfo],
+    data_header_map: dict
+) -> int:
+    """Encontra a coluna correspondente nos dados para uma coluna base."""
+    if col_info:
+        # Usa matching com nomes alternativos
+        for data_header, data_col in data_header_map.items():
+            if is_remuneracao_name_matching(col_info, data_header):
+                return data_col
+    else:
+        # Usa matching simples por normalização
+        normalized_base = normalize_header(base_col_name)
+        for data_header, data_col in data_header_map.items():
+            if normalize_header(data_header) == normalized_base:
+                return data_col
+    
+    raise HTTPException(
+        status_code=400,
+        detail=f"Coluna '{base_col_name}' não encontrada na planilha enviada."
+    )
+
+
+def find_emissoes_sheet(wb_data):
+    """Encontra a sheet de emissões no workbook."""
+    for sheet_name in wb_data.sheetnames:
+        if unidecode(sheet_name).lower().strip().startswith("emissoes"):
+            return wb_data[sheet_name]
+    return wb_data.active
+
+
 @router.post(
     "/converter-remuneracao/",
     summary="Converte planilha de remuneração",
@@ -65,73 +167,69 @@ async def converter_remuneracao(
     data_file: UploadFile = File(..., description="Planilha de dados a ser processada (ex: Digiforte.xlsx)")
 ):
     try:
-        # 1. Carrega o "template" (base) do disco do servidor
+        # 1. Carrega template base
         try:
             wb_base = openpyxl.load_workbook(REMUNERACAO_BASE_FILE_PATH)
             ws_base = wb_base.active
         except FileNotFoundError:
-            print(f"Erro Crítico: Arquivo base não encontrado em: {REMUNERACAO_BASE_FILE_PATH}")
             raise HTTPException(
-                status_code=500, 
+                status_code=500,
                 detail="Erro interno no servidor: O arquivo de template base não foi encontrado."
             )
 
-        # 2. Carrega o "arquivo de dados" (upload do usuário) da memória
+        # 2. Carrega arquivo de dados
         wb_data = openpyxl.load_workbook(data_file.file)
-        ws_data = wb_data.active
+        ws_data = find_emissoes_sheet(wb_data)
 
-        # 3. Mapeia os cabeçalhos
-        base_header_map = {cell.value: cell.column for cell in ws_base[1] if cell.value}
+        # 3. Prepara mapeamentos
+        base_col_name_to_info = {col_info.name: col_info for col_info in remuneracao_columns}
         data_header_map = {cell.value: cell.column for cell in ws_data[1] if cell.value}
         base_header_ordered = [cell.value for cell in ws_base[1] if cell.value]
 
-        # 4. Validação
-        missing_cols = [col_name for col_name in base_header_map if col_name not in data_header_map]
-        
-        if missing_cols:
-            detail_msg = f"Colunas faltando na planilha enviada: {', '.join(missing_cols)}"
-            print(f"Erro de Validação: {detail_msg}")
-            raise HTTPException(status_code=400, detail=detail_msg)
-            
-        # 5. Limpa o "template"
+        # 4. Mapeia colunas base -> dados
+        base_to_data_column_map = {}
+        for base_col_name in base_header_ordered:
+            if base_col_name == "VOUCHER":
+                continue
+            col_info = base_col_name_to_info.get(base_col_name)
+            base_to_data_column_map[base_col_name] = find_data_column_for_base_column(
+                base_col_name, col_info, data_header_map
+            )
+
+        # 5. Limpa template e copia dados
         if ws_base.max_row > 1:
             ws_base.delete_rows(idx=2, amount=ws_base.max_row - 1)
 
-        # 6. Copia os dados
         for data_row in ws_data.iter_rows(min_row=2):
             if all(cell.value is None for cell in data_row):
                 continue
-            
+
             new_row_values = []
             for col_name in base_header_ordered:
                 if col_name == "VOUCHER":
                     new_row_values.append("")
-                    continue
-
-                data_col_index = data_header_map[col_name]
-                value_to_copy = data_row[data_col_index - 1].value
-                new_row_values.append(value_to_copy)
-            
+                else:
+                    data_col_index = base_to_data_column_map[col_name]
+                    new_row_values.append(data_row[data_col_index - 1].value)
             ws_base.append(new_row_values)
 
-        # 7. Salva em buffer
+        # 6. Retorna arquivo convertido
         output_buffer = io.BytesIO()
         wb_base.save(output_buffer)
         output_buffer.seek(0)
 
-        # 8. Retorna o buffer
         return StreamingResponse(
             output_buffer,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={"Content-Disposition": "attachment; filename=Remuneracao-Convertida.xlsx"}
         )
 
-    except HTTPException as e:
-        raise e
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Ocorreu um erro inesperado: {e}")
         raise HTTPException(
-            status_code=500, 
+            status_code=500,
             detail=f"Ocorreu um erro inesperado ao processar o arquivo: {str(e)}"
         )
     
