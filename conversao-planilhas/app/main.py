@@ -6,7 +6,7 @@ from . import models # Import models para que o create_all saiba das tabelas
 from .config import settings
 
 # Importe os novos módulos de roteador
-from .routers import auth, agentes, localidades, remuneracao, tecd
+from .routers import auth, agentes, localidades, remuneracao, tecd, comissao
 
 # --- Configuração ---
 app = FastAPI(
@@ -30,6 +30,7 @@ app.include_router(agentes.router)
 app.include_router(localidades.router)
 app.include_router(remuneracao.router)
 app.include_router(tecd.router)
+app.include_router(comissao.router)
 
 # Evento de "startup": Cria as tabelas no banco de dados
 @app.on_event("startup")

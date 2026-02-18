@@ -2,6 +2,7 @@ import { BrowserRouter as Router, Routes, Route, Link, useLocation, Navigate } f
 import ConverterPlanilhas from './pages/ConverterPlanilhas';
 import Agentes from './pages/Agentes';
 import Localidades from './pages/Localidades';
+import Comissao from './pages/Comissao';
 import Login from './pages/Login';
 import ProtectedRoute from './components/ProtectedRoute';
 import { useAuth } from './contexts/AuthContext';
@@ -11,16 +12,12 @@ function Navigation() {
   const location = useLocation();
   const { user, logout, isAuthenticated } = useAuth();
 
-  const baseUrl = import.meta.env.BASE_URL.endsWith('/')
-    ? import.meta.env.BASE_URL.slice(0, -1)
-    : import.meta.env.BASE_URL;
+  const currentPath = location.pathname;
 
-  const currentPath =
-    baseUrl && location.pathname.startsWith(baseUrl)
-      ? location.pathname.slice(baseUrl.length) || '/'
-      : location.pathname;
-
-  const isActive = (path: string) => (currentPath === path ? 'active' : '');
+  const isActive = (path: string) =>
+    path === '/'
+      ? currentPath === '/' ? 'active' : ''
+      : currentPath.startsWith(path) ? 'active' : '';
 
   const logoSrc = `${import.meta.env.BASE_URL}logo.png`;
 
@@ -47,6 +44,11 @@ function Navigation() {
               <li>
                 <Link to="/localidades" className={isActive('/localidades')}>
                   Localidades de Atendimento
+                </Link>
+              </li>
+              <li>
+                <Link to="/comissao" className={isActive('/comissao')}>
+                  Comissão
                 </Link>
               </li>
             </ul>
@@ -115,6 +117,14 @@ function App() {
               element={
                 <ProtectedRoute>
                   <Localidades />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/comissao"
+              element={
+                <ProtectedRoute>
+                  <Comissao />
                 </ProtectedRoute>
               }
             />

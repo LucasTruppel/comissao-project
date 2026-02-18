@@ -31,3 +31,31 @@ export interface AgenteUpdateLocalidade {
   localidade_codigo: string;
 }
 
+// --- Commission Calculation ---
+
+export interface SaleInfo {
+  numero_pedido: string;
+  numero_protocolo: string;
+  valor_venda: number;
+  comissao: number;
+}
+
+export interface ContadorInfo {
+  nome: string;
+  cnpj_cpf: string;
+  faixa_comissao: string;
+  total_vendas: number;
+  total_comissao: number;
+  vendas: SaleInfo[];
+}
+
+export interface SellerInfo {
+  nome: string;
+  cnpj_cpf: string | null;
+  faixa_comissao: string;
+  total_vendas: number;
+  total_comissao: number;
+  contadores: ContadorInfo[];
+  vendas: SaleInfo[];
+}
+

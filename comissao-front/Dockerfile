@@ -1,10 +1,9 @@
-FROM node:20-alpine
+FROM node:20-alpine AS base
 
 WORKDIR /app
 
 ARG VITE_API_BASE_URL=address_not_set
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
-RUN echo "VITE_API_BASE_URL=${VITE_API_BASE_URL}"
 
 # Copy package files
 COPY package*.json ./
@@ -15,13 +14,13 @@ RUN npm ci
 # Copy application code
 COPY . .
 
-# Build the application
-RUN npm run build
-
-# Expose port
 EXPOSE 5173
 
-# Serve the built application
-CMD ["npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "5173"]
-# CMD ["npm", "run", "serve"]
+# ── Dev stage: Vite dev server with HMR ──
+FROM base AS dev
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]
 
+# ── Prod stage: build & serve static bundle ──
+FROM base AS prod
+RUN npm run build
+CMD ["npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "5173"]

@@ -78,3 +78,28 @@ class LocalidadeWithAgentes(Localidade):
 class AgenteUpdateLocalidade(BaseModel):
     cpf: str
     localidade_codigo: str
+
+# --- Commission Calculation ---
+
+class SaleInfo(BaseModel):
+    numero_pedido: str
+    numero_protocolo: str
+    valor_venda: float
+    comissao: float
+
+class ContadorInfo(BaseModel):
+    nome: str
+    cnpj_cpf: str
+    faixa_comissao: str
+    total_vendas: float
+    total_comissao: float
+    vendas: List[SaleInfo] = []
+
+class SellerInfo(BaseModel):
+    nome: str
+    cnpj_cpf: Optional[str] = None
+    faixa_comissao: str
+    total_vendas: float
+    total_comissao: float
+    contadores: List[ContadorInfo] = []
+    vendas: List[SaleInfo] = []

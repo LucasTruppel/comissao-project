@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Localidade, LocalidadeCreate, Agente, AgenteCreate, AgenteWithLocalidade, AgenteUpdateLocalidade } from './types';
+import type { Localidade, LocalidadeCreate, Agente, AgenteCreate, AgenteWithLocalidade, AgenteUpdateLocalidade, SellerInfo } from './types';
 import { API_BASE_URL } from './config';
 
 const api = axios.create({
@@ -89,6 +89,28 @@ export const createAgente = async (agente: AgenteCreate): Promise<Agente> => {
 
 export const updateAgenteLocalidade = async (update: AgenteUpdateLocalidade): Promise<AgenteWithLocalidade> => {
   const response = await api.post('/agentes/atualizar_localidade', update);
+  return response.data;
+};
+
+// Comissão
+export const calcularComissao = async (
+  vendasFile: File,
+  parceirosFile: File,
+  dataInicio: string,
+  dataFim: string
+): Promise<SellerInfo[]> => {
+  const formData = new FormData();
+  formData.append('vendas_file', vendasFile);
+  formData.append('parceiros_file', parceirosFile);
+  formData.append('data_inicio', dataInicio);
+  formData.append('data_fim', dataFim);
+
+  const response = await api.post('/calcular-comissao/', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  });
+
   return response.data;
 };
 
