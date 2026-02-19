@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { calcularComissao } from '../api';
-import type { SaleInfo, SellerInfo } from '../types';
+import type { SaleInfo, SellerInfo, RenewalPartnerInfo, ComissaoResponse } from '../types';
 import './Comissao.css';
 
 function formatCurrency(value: number): string {
@@ -25,9 +25,12 @@ export default function Comissao() {
   const [dataFim, setDataFim] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [results, setResults] = useState<SellerInfo[] | null>(null);
+  const [response, setResponse] = useState<ComissaoResponse | null>(null);
   // Generic expand/collapse set – keys are built per node type
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
+
+  const results = response?.sellers ?? null;
+  const parceiroRenovacao = response?.parceiro_renovacao ?? null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -43,7 +46,7 @@ export default function Comissao() {
 
     setLoading(true);
     setError(null);
-    setResults(null);
+    setResponse(null);
 
     try {
       const formatDate = (d: string) => {
@@ -57,9 +60,13 @@ export default function Comissao() {
         formatDate(dataInicio),
         formatDate(dataFim)
       );
-      setResults(data);
-      // Expand only the top-level sellers by default
-      setExpandedNodes(new Set(data.map((s) => sellerKey(s))));
+      setResponse(data);
+      // Expand only the top-level sellers by default + renewal partner
+      const initialExpanded = new Set(data.sellers.map((s) => sellerKey(s)));
+      if (data.parceiro_renovacao) {
+        initialExpanded.add(renewalPartnerKey);
+      }
+      setExpandedNodes(initialExpanded);
     } catch (err: any) {
       const detail = err.response?.data?.detail;
       setError(detail || 'Erro ao calcular comissão. Verifique os arquivos e tente novamente.');
@@ -69,10 +76,16 @@ export default function Comissao() {
   };
 
   // --- key helpers ---
+  const renewalPartnerKey = 'renewal-partner';
   const sellerKey = (s: SellerInfo) => `seller:${s.cnpj_cpf ?? s.nome}`;
   const directKey = (s: SellerInfo) => `direct:${s.cnpj_cpf ?? s.nome}`;
   const contadorKey = (s: SellerInfo, cDoc: string) =>
     `contador:${s.cnpj_cpf ?? s.nome}:${cDoc}`;
+  // Keys for renewal partner inner tree
+  const rpSellerKey = (s: SellerInfo) => `rp-seller:${s.cnpj_cpf ?? s.nome}`;
+  const rpDirectKey = (s: SellerInfo) => `rp-direct:${s.cnpj_cpf ?? s.nome}`;
+  const rpContadorKey = (s: SellerInfo, cDoc: string) =>
+    `rp-contador:${s.cnpj_cpf ?? s.nome}:${cDoc}`;
 
   const toggle = (key: string) => {
     setExpandedNodes((prev) => {
@@ -94,21 +107,39 @@ export default function Comissao() {
         keys.add(contadorKey(s, c.cnpj_cpf));
       }
     }
+    // Renewal partner keys
+    if (parceiroRenovacao) {
+      keys.add(renewalPartnerKey);
+      for (const s of parceiroRenovacao.sellers) {
+        keys.add(rpSellerKey(s));
+        if (getDirectSales(s).length > 0) keys.add(rpDirectKey(s));
+        for (const c of s.contadores) {
+          keys.add(rpContadorKey(s, c.cnpj_cpf));
+        }
+      }
+    }
     return keys;
-  }, [results]);
+  }, [results, parceiroRenovacao]);
 
   /** Only seller keys – expands vendedores to show contadores/vendas diretas, no leaf sales. */
   const sellerOnlyKeys = useMemo(() => {
     if (!results) return new Set<string>();
-    return new Set(results.map((s) => sellerKey(s)));
-  }, [results]);
+    const keys = new Set(results.map((s) => sellerKey(s)));
+    if (parceiroRenovacao) {
+      keys.add(renewalPartnerKey);
+      for (const s of parceiroRenovacao.sellers) {
+        keys.add(rpSellerKey(s));
+      }
+    }
+    return keys;
+  }, [results, parceiroRenovacao]);
 
   const expandAll = () => setExpandedNodes(new Set(allKeys));
   const expandVendedores = () => setExpandedNodes(new Set(sellerOnlyKeys));
   const collapseAll = () => setExpandedNodes(new Set());
 
   // --- render a single sale row ---
-  const renderSale = (sale: SaleInfo, sellerComissao?: number) => (
+  const renderSale = (sale: SaleInfo, sellerComissao?: number, showRenewalComissao?: boolean) => (
     <div key={sale.numero_pedido} className="tree-node tree-sale">
       <div className="tree-node-header sale-header">
         <div className="tree-node-info">
@@ -120,6 +151,9 @@ export default function Comissao() {
             <span className="sale-field-label">Protocolo</span>
             {sale.numero_protocolo}
           </span>
+          {sale.is_renovacao && (
+            <span className="tree-node-badge badge-renovacao">Renovação</span>
+          )}
         </div>
         <div className="tree-node-totals">
           <div className="total-item">
@@ -149,10 +183,313 @@ export default function Comissao() {
               </span>
             </div>
           )}
+          {showRenewalComissao && sale.is_renovacao && sale.comissao_renovacao > 0 && (
+            <div className="total-item">
+              <span className="total-label">Comissão<br />de Renovação</span>
+              <span className="total-value total-comissao-renovacao">
+                {formatCurrency(sale.comissao_renovacao)}
+              </span>
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
+
+  /** Render a seller node (reused for main tree and renewal partner inner tree). */
+  const renderSellerNode = (
+    seller: SellerInfo,
+    sKey: string,
+    dKey: string,
+    cKeyFn: (s: SellerInfo, cDoc: string) => string,
+    showRenewalComissao: boolean
+  ) => {
+    const isSellerExpanded = expandedNodes.has(sKey);
+    const directSales = getDirectSales(seller);
+    const hasChildren = directSales.length > 0 || seller.contadores.length > 0;
+
+    return (
+      <div key={sKey} className="tree-node tree-seller">
+        {/* ── Seller header ── */}
+        <div
+          className="tree-node-header seller-header"
+          onClick={() => toggle(sKey)}
+        >
+          <span className={`tree-toggle ${isSellerExpanded ? 'expanded' : ''}`}>
+            {hasChildren ? '▶' : '•'}
+          </span>
+          <div className="tree-node-info">
+            <span className="tree-node-name">{seller.nome}</span>
+            {seller.cnpj_cpf && (
+              <span className="tree-node-doc">{seller.cnpj_cpf}</span>
+            )}
+            <span className="tree-node-badge badge-faixa">
+              {seller.faixa_comissao}
+            </span>
+          </div>
+          <div className="tree-node-totals">
+            <div className="total-item">
+              <span className="total-label">Nº Vendas</span>
+              <span className="total-value">{seller.vendas.length}</span>
+            </div>
+            <div className="total-item">
+              <span className="total-label">Total Vendas</span>
+              <span className="total-value">
+                {formatCurrency(seller.total_vendas)}
+              </span>
+            </div>
+            <div className="total-item">
+              <span className="total-label">Comissão<br />do Vendedor</span>
+              <span className="total-value total-comissao">
+                {formatCurrency(seller.total_comissao)}
+              </span>
+            </div>
+            {showRenewalComissao && seller.total_comissao_renovacao > 0 && (
+              <div className="total-item">
+                <span className="total-label">Comissão<br />de Renovação</span>
+                <span className="total-value total-comissao-renovacao">
+                  {formatCurrency(seller.total_comissao_renovacao)}
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ── Seller children ── */}
+        {isSellerExpanded && hasChildren && (
+          <div className="tree-children">
+            {/* Direct vendedor sales */}
+            {directSales.length > 0 && (() => {
+              const isDirectExpanded = expandedNodes.has(dKey);
+              const directTotal = directSales.reduce(
+                (acc, s) => acc + s.valor_venda,
+                0
+              );
+              const directComissao = directSales.reduce(
+                (acc, s) => acc + s.comissao,
+                0
+              );
+              const directComissaoRenovacao = directSales.reduce(
+                (acc, s) => acc + (s.is_renovacao ? s.comissao_renovacao : 0),
+                0
+              );
+
+              return (
+                <div className="tree-node tree-direct">
+                  <div
+                    className="tree-node-header direct-header"
+                    onClick={() => toggle(dKey)}
+                  >
+                    <span
+                      className={`tree-toggle ${isDirectExpanded ? 'expanded' : ''}`}
+                    >
+                      ▶
+                    </span>
+                    <div className="tree-node-info">
+                      <span className="tree-node-name">
+                        Vendas Diretas
+                      </span>
+                      <span className="tree-node-badge badge-faixa">
+                        {seller.faixa_comissao}
+                      </span>
+                    </div>
+                    <div className="tree-node-totals">
+                      <div className="total-item">
+                        <span className="total-label">Nº Vendas</span>
+                        <span className="total-value">
+                          {directSales.length}
+                        </span>
+                      </div>
+                      <div className="total-item">
+                        <span className="total-label">Total Vendas</span>
+                        <span className="total-value">
+                          {formatCurrency(directTotal)}
+                        </span>
+                      </div>
+                      <div className="total-item">
+                        <span className="total-label">Comissão<br />do Vendedor</span>
+                        <span className="total-value total-comissao">
+                          {formatCurrency(directComissao)}
+                        </span>
+                      </div>
+                      {showRenewalComissao && directComissaoRenovacao > 0 && (
+                        <div className="total-item">
+                          <span className="total-label">Comissão<br />de Renovação</span>
+                          <span className="total-value total-comissao-renovacao">
+                            {formatCurrency(directComissaoRenovacao)}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {isDirectExpanded && (
+                    <div className="tree-children tree-sales-list">
+                      {directSales.map((sale) => renderSale(sale, undefined, showRenewalComissao))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Contadores */}
+            {seller.contadores.map((contador) => {
+              const cKey = cKeyFn(seller, contador.cnpj_cpf);
+              const isContadorExpanded = expandedNodes.has(cKey);
+
+              // Seller's commission on this contador's sales
+              const contadorPedidos = new Set(contador.vendas.map((v) => v.numero_pedido));
+              const sellerComissaoOnContador = seller.vendas
+                .filter((v) => contadorPedidos.has(v.numero_pedido))
+                .reduce((acc, v) => acc + v.comissao, 0);
+
+              return (
+                <div
+                  key={contador.cnpj_cpf}
+                  className="tree-node tree-contador"
+                >
+                  <div
+                    className="tree-node-header contador-header"
+                    onClick={() => toggle(cKey)}
+                  >
+                    <span
+                      className={`tree-toggle ${isContadorExpanded ? 'expanded' : ''}`}
+                    >
+                      {contador.vendas.length > 0 ? '▶' : '•'}
+                    </span>
+                    <div className="tree-node-info">
+                      <span className="tree-node-name">{contador.nome}</span>
+                      <span className="tree-node-doc">
+                        {contador.cnpj_cpf}
+                      </span>
+                      <span className="tree-node-badge badge-contador">
+                        Contador
+                      </span>
+                      <span className="tree-node-badge badge-faixa">
+                        {contador.faixa_comissao}
+                      </span>
+                    </div>
+                    <div className="tree-node-totals">
+                      <div className="total-item">
+                        <span className="total-label">Nº Vendas</span>
+                        <span className="total-value">
+                          {contador.vendas.length}
+                        </span>
+                      </div>
+                      <div className="total-item">
+                        <span className="total-label">Total Vendas</span>
+                        <span className="total-value">
+                          {formatCurrency(contador.total_vendas)}
+                        </span>
+                      </div>
+                      <div className="total-item">
+                        <span className="total-label">Comissão<br />do Contador</span>
+                        <span className="total-value total-comissao">
+                          {formatCurrency(contador.total_comissao)}
+                        </span>
+                      </div>
+                      <div className="total-item">
+                        <span className="total-label">Comissão<br />do Vendedor</span>
+                        <span className="total-value total-comissao">
+                          {formatCurrency(sellerComissaoOnContador)}
+                        </span>
+                      </div>
+                      {showRenewalComissao && contador.total_comissao_renovacao > 0 && (
+                        <div className="total-item">
+                          <span className="total-label">Comissão<br />de Renovação</span>
+                          <span className="total-value total-comissao-renovacao">
+                            {formatCurrency(contador.total_comissao_renovacao)}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {isContadorExpanded && contador.vendas.length > 0 && (() => {
+                    // Build lookup: pedido -> seller comissao
+                    const sellerComissaoMap = new Map<string, number>();
+                    for (const sv of seller.vendas) {
+                      sellerComissaoMap.set(sv.numero_pedido, sv.comissao);
+                    }
+                    return (
+                      <div className="tree-children tree-sales-list">
+                        {contador.vendas.map((sale) =>
+                          renderSale(sale, sellerComissaoMap.get(sale.numero_pedido) ?? 0, showRenewalComissao)
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  /** Render the renewal partner top-level node. */
+  const renderRenewalPartner = (rp: RenewalPartnerInfo) => {
+    const isExpanded = expandedNodes.has(renewalPartnerKey);
+    const hasChildren = rp.sellers.length > 0;
+
+    return (
+      <div className="tree-node tree-renewal-partner">
+        <div
+          className="tree-node-header renewal-partner-header"
+          onClick={() => toggle(renewalPartnerKey)}
+        >
+          <span className={`tree-toggle ${isExpanded ? 'expanded' : ''}`}>
+            {hasChildren ? '▶' : '•'}
+          </span>
+          <div className="tree-node-info">
+            <span className="tree-node-name">{rp.nome}</span>
+            <span className="tree-node-doc">{rp.cnpj_cpf}</span>
+            <span className="tree-node-badge badge-renovacao">
+              Parceiro de Renovação
+            </span>
+            <span className="tree-node-badge badge-faixa">
+              {rp.faixa_comissao}
+            </span>
+          </div>
+          <div className="tree-node-totals">
+            <div className="total-item">
+              <span className="total-label">Nº Vendas</span>
+              <span className="total-value">
+                {rp.sellers.reduce((acc, s) => acc + s.vendas.length + s.contadores.reduce((ca, c) => ca + c.vendas.length, 0), 0)}
+              </span>
+            </div>
+            <div className="total-item">
+              <span className="total-label">Total Vendas</span>
+              <span className="total-value">
+                {formatCurrency(rp.total_vendas)}
+              </span>
+            </div>
+            <div className="total-item">
+              <span className="total-label">Comissão<br />de Renovação</span>
+              <span className="total-value total-comissao-renovacao">
+                {formatCurrency(rp.total_comissao)}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {isExpanded && hasChildren && (
+          <div className="tree-children">
+            {rp.sellers.map((seller) =>
+              renderSellerNode(
+                seller,
+                rpSellerKey(seller),
+                rpDirectKey(seller),
+                rpContadorKey,
+                true
+              )
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="comissao-page">
@@ -253,210 +590,25 @@ export default function Comissao() {
             </div>
           </div>
 
-          {results.length === 0 ? (
+          {results.length === 0 && !parceiroRenovacao ? (
             <div className="empty-message">
               Nenhum resultado encontrado para o período selecionado.
             </div>
           ) : (
             <div className="tree">
-              {results.map((seller) => {
-                const sKey = sellerKey(seller);
-                const isSellerExpanded = expandedNodes.has(sKey);
-                const directSales = getDirectSales(seller);
-                const hasChildren = directSales.length > 0 || seller.contadores.length > 0;
+              {/* Renewal Partner node */}
+              {parceiroRenovacao && renderRenewalPartner(parceiroRenovacao)}
 
-                return (
-                  <div key={sKey} className="tree-node tree-seller">
-                    {/* ── Seller header ── */}
-                    <div
-                      className="tree-node-header seller-header"
-                      onClick={() => toggle(sKey)}
-                    >
-                      <span className={`tree-toggle ${isSellerExpanded ? 'expanded' : ''}`}>
-                        {hasChildren ? '▶' : '•'}
-                      </span>
-                      <div className="tree-node-info">
-                        <span className="tree-node-name">{seller.nome}</span>
-                        {seller.cnpj_cpf && (
-                          <span className="tree-node-doc">{seller.cnpj_cpf}</span>
-                        )}
-                        <span className="tree-node-badge badge-faixa">
-                          {seller.faixa_comissao}
-                        </span>
-                      </div>
-                      <div className="tree-node-totals">
-                        <div className="total-item">
-                          <span className="total-label">Nº Vendas</span>
-                          <span className="total-value">{seller.vendas.length}</span>
-                        </div>
-                        <div className="total-item">
-                          <span className="total-label">Total Vendas</span>
-                          <span className="total-value">
-                            {formatCurrency(seller.total_vendas)}
-                          </span>
-                        </div>
-                        <div className="total-item">
-                          <span className="total-label">Comissão</span>
-                          <span className="total-value total-comissao">
-                            {formatCurrency(seller.total_comissao)}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* ── Seller children ── */}
-                    {isSellerExpanded && hasChildren && (
-                      <div className="tree-children">
-                        {/* Direct vendedor sales */}
-                        {directSales.length > 0 && (() => {
-                          const dKey = directKey(seller);
-                          const isDirectExpanded = expandedNodes.has(dKey);
-                          const directTotal = directSales.reduce(
-                            (acc, s) => acc + s.valor_venda,
-                            0
-                          );
-                          const directComissao = directSales.reduce(
-                            (acc, s) => acc + s.comissao,
-                            0
-                          );
-
-                          return (
-                            <div className="tree-node tree-direct">
-                              <div
-                                className="tree-node-header direct-header"
-                                onClick={() => toggle(dKey)}
-                              >
-                                <span
-                                  className={`tree-toggle ${isDirectExpanded ? 'expanded' : ''}`}
-                                >
-                                  ▶
-                                </span>
-                                <div className="tree-node-info">
-                                  <span className="tree-node-name">
-                                    Vendas Diretas
-                                  </span>
-                                  <span className="tree-node-badge badge-faixa">
-                                    {seller.faixa_comissao}
-                                  </span>
-                                </div>
-                                <div className="tree-node-totals">
-                                  <div className="total-item">
-                                    <span className="total-label">Nº Vendas</span>
-                                    <span className="total-value">
-                                      {directSales.length}
-                                    </span>
-                                  </div>
-                                  <div className="total-item">
-                                    <span className="total-label">Total Vendas</span>
-                                    <span className="total-value">
-                                      {formatCurrency(directTotal)}
-                                    </span>
-                                  </div>
-                                  <div className="total-item">
-                                    <span className="total-label">Comissão</span>
-                                    <span className="total-value total-comissao">
-                                      {formatCurrency(directComissao)}
-                                    </span>
-                                  </div>
-                                </div>
-                              </div>
-
-                              {isDirectExpanded && (
-                                <div className="tree-children tree-sales-list">
-                                  {directSales.map((sale) => renderSale(sale))}
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })()}
-
-                        {/* Contadores */}
-                        {seller.contadores.map((contador) => {
-                          const cKey = contadorKey(seller, contador.cnpj_cpf);
-                          const isContadorExpanded = expandedNodes.has(cKey);
-
-                          // Seller's commission on this contador's sales
-                          const contadorPedidos = new Set(contador.vendas.map((v) => v.numero_pedido));
-                          const sellerComissaoOnContador = seller.vendas
-                            .filter((v) => contadorPedidos.has(v.numero_pedido))
-                            .reduce((acc, v) => acc + v.comissao, 0);
-
-                          return (
-                            <div
-                              key={contador.cnpj_cpf}
-                              className="tree-node tree-contador"
-                            >
-                              <div
-                                className="tree-node-header contador-header"
-                                onClick={() => toggle(cKey)}
-                              >
-                                <span
-                                  className={`tree-toggle ${isContadorExpanded ? 'expanded' : ''}`}
-                                >
-                                  {contador.vendas.length > 0 ? '▶' : '•'}
-                                </span>
-                                <div className="tree-node-info">
-                                  <span className="tree-node-name">{contador.nome}</span>
-                                  <span className="tree-node-doc">
-                                    {contador.cnpj_cpf}
-                                  </span>
-                                  <span className="tree-node-badge badge-contador">
-                                    Contador
-                                  </span>
-                                  <span className="tree-node-badge badge-faixa">
-                                    {contador.faixa_comissao}
-                                  </span>
-                                </div>
-                                <div className="tree-node-totals">
-                                  <div className="total-item">
-                                    <span className="total-label">Nº Vendas</span>
-                                    <span className="total-value">
-                                      {contador.vendas.length}
-                                    </span>
-                                  </div>
-                                  <div className="total-item">
-                                    <span className="total-label">Total Vendas</span>
-                                    <span className="total-value">
-                                      {formatCurrency(contador.total_vendas)}
-                                    </span>
-                                  </div>
-                                  <div className="total-item">
-                                    <span className="total-label">Comissão<br />do Contador</span>
-                                    <span className="total-value total-comissao">
-                                      {formatCurrency(contador.total_comissao)}
-                                    </span>
-                                  </div>
-                                  <div className="total-item">
-                                    <span className="total-label">Comissão<br />do Vendedor</span>
-                                    <span className="total-value total-comissao">
-                                      {formatCurrency(sellerComissaoOnContador)}
-                                    </span>
-                                  </div>
-                                </div>
-                              </div>
-
-                              {isContadorExpanded && contador.vendas.length > 0 && (() => {
-                                // Build lookup: pedido -> seller comissao
-                                const sellerComissaoMap = new Map<string, number>();
-                                for (const sv of seller.vendas) {
-                                  sellerComissaoMap.set(sv.numero_pedido, sv.comissao);
-                                }
-                                return (
-                                  <div className="tree-children tree-sales-list">
-                                    {contador.vendas.map((sale) =>
-                                      renderSale(sale, sellerComissaoMap.get(sale.numero_pedido) ?? 0)
-                                    )}
-                                  </div>
-                                );
-                              })()}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+              {/* Sellers (alphabetical order) */}
+              {[...results].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')).map((seller) =>
+                renderSellerNode(
+                  seller,
+                  sellerKey(seller),
+                  directKey(seller),
+                  contadorKey,
+                  false
+                )
+              )}
             </div>
           )}
         </div>

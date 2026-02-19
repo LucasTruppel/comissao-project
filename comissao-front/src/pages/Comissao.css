@@ -160,6 +160,18 @@
   border-left: 4px solid #042552;
 }
 
+.tree-renewal-partner {
+  border-left: 4px solid #17a2b8;
+}
+
+.tree-renewal-partner > .tree-children .tree-seller {
+  border-left: 4px solid #042552;
+}
+
+.renewal-partner-header:hover {
+  background: #f0f9fa;
+}
+
 .tree-node-header {
   display: flex;
   align-items: center;
@@ -234,6 +246,11 @@
   color: #856404;
 }
 
+.badge-renovacao {
+  background: #d4edda;
+  color: #155724;
+}
+
 .tree-node-totals {
   display: flex;
   gap: 1.5rem;
@@ -266,6 +283,10 @@
 
 .total-comissao {
   color: #28a745;
+}
+
+.total-comissao-renovacao {
+  color: #17a2b8;
 }
 
 /* --- Children --- */

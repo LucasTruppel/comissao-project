@@ -8,7 +8,9 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Form
 from unidecode import unidecode
 
 from ..auth import get_current_active_user
-from ..schemas import SellerInfo, ContadorInfo, SaleInfo
+from ..schemas import SellerInfo, ContadorInfo, SaleInfo, RenewalPartnerInfo, ComissaoResponse
+
+RENEWAL_PARTNER_CPF_CNPJ = "34151313001"
 
 router = APIRouter(
     tags=["Comissão"],
@@ -156,6 +158,7 @@ def get_vendas_column_names(headers_map: Dict[str, str]) -> Dict[str, str]:
         'valor_venda': get_header_name(headers_map, 'Valor Venda'),
         'status_financeiro': get_header_name(headers_map, 'Status Financeiro'),
         'doc_vendedor': get_header_name(headers_map, 'Doc. Vendedor'),
+        'usuario_criacao_pedido': get_header_name(headers_map, 'Usuário de Criação do pedido'),
     }
 
 
@@ -172,7 +175,9 @@ def get_parceiros_column_names(headers_map: Dict[str, str]) -> Dict[str, str]:
 
 def validate_columns(vendas_cols: Dict[str, Optional[str]], parceiros_cols: Dict[str, Optional[str]]):
     """Validate that all required columns are present."""
-    missing_vendas = [k for k, v in vendas_cols.items() if v is None]
+    # usuario_criacao_pedido is optional (used for renewal detection)
+    optional_vendas = {'usuario_criacao_pedido'}
+    missing_vendas = [k for k, v in vendas_cols.items() if v is None and k not in optional_vendas]
     missing_parceiros = [k for k, v in parceiros_cols.items() if v is None]
     
     if missing_vendas:
@@ -273,6 +278,37 @@ def build_sellers_and_contadores(
     return sellers_dict, contadores_dict, contador_to_seller, seller_name_to_cpf
 
 
+def find_renewal_partner_info(
+    parceiros_rows: List[Dict[str, str]],
+    parceiros_cols: Dict[str, str]
+) -> Optional[Tuple[str, str, str]]:
+    """Find renewal partner info from parceiros CSV.
+    
+    Returns: (name, cpf_cnpj_raw, faixa_comissao) or None if not found.
+    """
+    for row in parceiros_rows:
+        cnpj_cpf_raw = row.get(parceiros_cols['cnpj_cpf'], "").strip() if parceiros_cols['cnpj_cpf'] else ""
+        cnpj_cpf_normalized = normalize_cpf_cnpj(cnpj_cpf_raw)
+        if cnpj_cpf_normalized == RENEWAL_PARTNER_CPF_CNPJ:
+            nome = row.get(parceiros_cols['nome_razao'], "").strip() if parceiros_cols['nome_razao'] else ""
+            nome = nome.split(" - ")[0].strip()
+            faixa = row.get(parceiros_cols['faixa_comissao'], "").strip() if parceiros_cols['faixa_comissao'] else ""
+            return nome, cnpj_cpf_raw, faixa
+    return None
+
+
+def is_renewal_sale(
+    usuario_criacao_pedido: str,
+    renewal_partner_name: str
+) -> bool:
+    """Check if a sale is a renewal based on 'Usuário de Criação do pedido'."""
+    if not usuario_criacao_pedido or not renewal_partner_name:
+        return False
+    normalized_usuario = unidecode(usuario_criacao_pedido.strip().upper())
+    normalized_name = unidecode(renewal_partner_name.strip().upper())
+    return normalized_name in normalized_usuario
+
+
 def find_seller(doc_vendedor: str, sellers_dict: Dict[str, SellerInfo]) -> Optional[SellerInfo]:
     """Find seller by CPF/CNPJ (normalized)."""
     doc_normalized = normalize_cpf_cnpj(doc_vendedor)
@@ -299,13 +335,16 @@ def process_sale(
     fim: datetime,
     sellers_dict: Dict[str, SellerInfo],
     contadores_dict: Dict[str, ContadorInfo],
-    contador_to_seller: Dict[str, str]
+    contador_to_seller: Dict[str, str],
+    renewal_partner_name: Optional[str] = None,
+    renewal_commission_pct: Optional[float] = None
 ):
     """Process a single sale and update seller/contador totals.
     
     Logic:
     - If 'Doc. Vendedor' matches a contador CPF/CNPJ, the sale has both a contador and a seller (via Gestor 01)
     - If 'Doc. Vendedor' matches a seller CPF/CNPJ, the sale only has a seller (no contador)
+    - If 'Usuário de Criação do pedido' contains the renewal partner's name, the sale is a renewal
     """
     # Get field values
     status_financeiro = row.get(vendas_cols['status_financeiro'], "").strip() if vendas_cols['status_financeiro'] else ""
@@ -314,6 +353,9 @@ def process_sale(
     numero_pedido = row.get(vendas_cols['numero_pedido'], "").strip() if vendas_cols['numero_pedido'] else ""
     numero_protocolo = row.get(vendas_cols['numero_protocolo'], "").strip() if vendas_cols['numero_protocolo'] else ""
     valor_venda_str = row.get(vendas_cols['valor_venda'], "").strip() if vendas_cols['valor_venda'] else ""
+    usuario_criacao_pedido = ""
+    if vendas_cols.get('usuario_criacao_pedido'):
+        usuario_criacao_pedido = row.get(vendas_cols['usuario_criacao_pedido'], "").strip()
     
     # Filter by Status Financeiro
     if status_financeiro.upper() != "PAGO":
@@ -331,13 +373,23 @@ def process_sale(
     if not doc_vendedor:
         return  # No document, skip
     
+    # Determine if this is a renewal sale
+    # Do not consider as renewal when the seller is the renewal partner
+    sale_is_renovacao = False
+    sale_comissao_renovacao = 0.0
+    doc_vendedor_normalized = normalize_cpf_cnpj(doc_vendedor)
+    seller_is_renewal_partner = doc_vendedor_normalized == RENEWAL_PARTNER_CPF_CNPJ
+    if renewal_partner_name and renewal_commission_pct is not None and not seller_is_renewal_partner:
+        sale_is_renovacao = is_renewal_sale(usuario_criacao_pedido, renewal_partner_name)
+        if sale_is_renovacao:
+            sale_comissao_renovacao = valor_venda * renewal_commission_pct
+    
     # Check if vendedor is a contador first (by CPF/CNPJ)
     contador = find_contador(doc_vendedor, contadores_dict)
     
     if contador:
         # Vendedor is a contador - sale has both contador and seller
         # Find the seller associated with this contador via Gestor 01
-        doc_vendedor_normalized = normalize_cpf_cnpj(doc_vendedor)
         seller_cpf = contador_to_seller.get(doc_vendedor_normalized)
         if not seller_cpf:
             return  # Contador has no associated seller, skip
@@ -359,12 +411,16 @@ def process_sale(
             numero_pedido=numero_pedido,
             numero_protocolo=numero_protocolo,
             valor_venda=valor_venda,
-            comissao=contador_commission
+            comissao=contador_commission,
+            is_renovacao=sale_is_renovacao,
+            comissao_renovacao=sale_comissao_renovacao
         )
         
         contador.vendas.append(contador_sale_info)
         contador.total_vendas += valor_venda
         contador.total_comissao += contador_commission
+        if sale_is_renovacao:
+            contador.total_comissao_renovacao += sale_comissao_renovacao
         
         # Calculate seller commission
         seller_commission_pct = parse_commission_percentage(seller.faixa_comissao)
@@ -378,12 +434,16 @@ def process_sale(
             numero_pedido=numero_pedido,
             numero_protocolo=numero_protocolo,
             valor_venda=valor_venda,
-            comissao=seller_commission
+            comissao=seller_commission,
+            is_renovacao=sale_is_renovacao,
+            comissao_renovacao=sale_comissao_renovacao
         )
         
         seller.vendas.append(seller_sale_info)
         seller.total_vendas += valor_venda
         seller.total_comissao += seller_commission
+        if sale_is_renovacao:
+            seller.total_comissao_renovacao += sale_comissao_renovacao
         
     else:
         # Vendedor is a seller - sale only has seller (no contador)
@@ -403,13 +463,17 @@ def process_sale(
             numero_pedido=numero_pedido,
             numero_protocolo=numero_protocolo,
             valor_venda=valor_venda,
-            comissao=seller_commission
+            comissao=seller_commission,
+            is_renovacao=sale_is_renovacao,
+            comissao_renovacao=sale_comissao_renovacao
         )
         
         # Add to seller
         seller.vendas.append(sale_info)
         seller.total_vendas += valor_venda
         seller.total_comissao += seller_commission
+        if sale_is_renovacao:
+            seller.total_comissao_renovacao += sale_comissao_renovacao
 
 
 def process_sales(
@@ -419,11 +483,17 @@ def process_sales(
     fim: datetime,
     sellers_dict: Dict[str, SellerInfo],
     contadores_dict: Dict[str, ContadorInfo],
-    contador_to_seller: Dict[str, str]
+    contador_to_seller: Dict[str, str],
+    renewal_partner_name: Optional[str] = None,
+    renewal_commission_pct: Optional[float] = None
 ):
     """Process all sales and update seller/contador totals."""
     for row in vendas_rows:
-        process_sale(row, vendas_cols, inicio, fim, sellers_dict, contadores_dict, contador_to_seller)
+        process_sale(
+            row, vendas_cols, inicio, fim,
+            sellers_dict, contadores_dict, contador_to_seller,
+            renewal_partner_name, renewal_commission_pct
+        )
 
 
 def filter_and_format_results(sellers_dict: Dict[str, SellerInfo]) -> List[SellerInfo]:
@@ -440,11 +510,85 @@ def filter_and_format_results(sellers_dict: Dict[str, SellerInfo]) -> List[Selle
     return result
 
 
+def build_renewal_partner_node(
+    sellers: List[SellerInfo],
+    renewal_partner_name: str,
+    renewal_partner_cpf_cnpj: str,
+    renewal_partner_faixa: str
+) -> Optional[RenewalPartnerInfo]:
+    """Build renewal partner node with filtered renewal-only sales tree.
+    
+    Replicates the seller/contador tree but only including renewal sales.
+    """
+    renewal_sellers: List[SellerInfo] = []
+    partner_total_vendas = 0.0
+    partner_total_comissao = 0.0
+    
+    for seller in sellers:
+        # Filter renewal sales for this seller
+        renewal_vendas = [v for v in seller.vendas if v.is_renovacao]
+        
+        # Build filtered contadores with only renewal sales
+        renewal_contadores: List[ContadorInfo] = []
+        for contador in seller.contadores:
+            renewal_contador_vendas = [v for v in contador.vendas if v.is_renovacao]
+            if renewal_contador_vendas:
+                renewal_contadores.append(ContadorInfo(
+                    nome=contador.nome,
+                    cnpj_cpf=contador.cnpj_cpf,
+                    faixa_comissao=contador.faixa_comissao,
+                    total_vendas=sum(v.valor_venda for v in renewal_contador_vendas),
+                    total_comissao=sum(v.comissao for v in renewal_contador_vendas),
+                    total_comissao_renovacao=sum(v.comissao_renovacao for v in renewal_contador_vendas),
+                    vendas=renewal_contador_vendas
+                ))
+        
+        # Only include seller if it has renewal sales (direct or via contadores)
+        if not renewal_vendas and not renewal_contadores:
+            continue
+        
+        seller_renewal_total_vendas = sum(v.valor_venda for v in renewal_vendas)
+        seller_renewal_total_comissao = sum(v.comissao for v in renewal_vendas)
+        seller_renewal_total_comissao_renovacao = sum(v.comissao_renovacao for v in renewal_vendas)
+        
+        renewal_seller = SellerInfo(
+            nome=seller.nome,
+            cnpj_cpf=seller.cnpj_cpf,
+            faixa_comissao=seller.faixa_comissao,
+            total_vendas=seller_renewal_total_vendas,
+            total_comissao=seller_renewal_total_comissao,
+            total_comissao_renovacao=seller_renewal_total_comissao_renovacao,
+            contadores=renewal_contadores,
+            vendas=renewal_vendas
+        )
+        renewal_sellers.append(renewal_seller)
+        
+        # Accumulate partner totals (from direct sales + contador sales)
+        partner_total_vendas += seller_renewal_total_vendas
+        partner_total_comissao += seller_renewal_total_comissao_renovacao
+        for rc in renewal_contadores:
+            partner_total_vendas += rc.total_vendas
+            partner_total_comissao += rc.total_comissao_renovacao
+    
+    if not renewal_sellers:
+        return None
+    
+    return RenewalPartnerInfo(
+        nome=renewal_partner_name,
+        cnpj_cpf=renewal_partner_cpf_cnpj,
+        faixa_comissao=renewal_partner_faixa,
+        total_vendas=partner_total_vendas,
+        total_comissao=partner_total_comissao,
+        sellers=renewal_sellers
+    )
+
+
 @router.post(
     "/calcular-comissao/",
     summary="Calcula comissão de vendedores e contadores",
     description="Recebe dois arquivos CSV (vendas e parceiros) e calcula as comissões "
-                "para vendedores e contadores no período especificado."
+                "para vendedores e contadores no período especificado.",
+    response_model=ComissaoResponse
 )
 async def calcular_comissao(
     vendas_file: UploadFile = File(..., description="CSV de vendas"),
@@ -472,14 +616,41 @@ async def calcular_comissao(
             parceiros_rows, parceiros_cols
         )
         
+        # Find renewal partner info
+        renewal_partner_name = None
+        renewal_partner_cpf_cnpj = ""
+        renewal_partner_faixa = ""
+        renewal_commission_pct = None
+        
+        renewal_info = find_renewal_partner_info(parceiros_rows, parceiros_cols)
+        if renewal_info:
+            renewal_partner_name, renewal_partner_cpf_cnpj, renewal_partner_faixa = renewal_info
+            renewal_commission_pct = parse_commission_percentage(renewal_partner_faixa)
+        
         # Process all sales
         process_sales(
             vendas_rows, vendas_cols, inicio, fim,
-            sellers_dict, contadores_dict, contador_to_seller
+            sellers_dict, contadores_dict, contador_to_seller,
+            renewal_partner_name, renewal_commission_pct
         )
         
         # Filter and format results
-        return filter_and_format_results(sellers_dict)
+        sellers = filter_and_format_results(sellers_dict)
+        
+        # Build renewal partner node
+        parceiro_renovacao = None
+        if renewal_partner_name and renewal_commission_pct is not None:
+            parceiro_renovacao = build_renewal_partner_node(
+                sellers,
+                renewal_partner_name,
+                renewal_partner_cpf_cnpj,
+                renewal_partner_faixa
+            )
+        
+        return ComissaoResponse(
+            sellers=sellers,
+            parceiro_renovacao=parceiro_renovacao
+        )
     
     except HTTPException:
         raise

@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Localidade, LocalidadeCreate, Agente, AgenteCreate, AgenteWithLocalidade, AgenteUpdateLocalidade, SellerInfo } from './types';
+import type { Localidade, LocalidadeCreate, Agente, AgenteCreate, AgenteWithLocalidade, AgenteUpdateLocalidade, ComissaoResponse } from './types';
 import { API_BASE_URL } from './config';
 
 const api = axios.create({
@@ -98,7 +98,7 @@ export const calcularComissao = async (
   parceirosFile: File,
   dataInicio: string,
   dataFim: string
-): Promise<SellerInfo[]> => {
+): Promise<ComissaoResponse> => {
   const formData = new FormData();
   formData.append('vendas_file', vendasFile);
   formData.append('parceiros_file', parceirosFile);

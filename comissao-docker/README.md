@@ -6,7 +6,8 @@ This directory contains the Docker Compose configuration for the entire Comissã
 
 - **db**: MySQL 8.0 database
 - **api**: FastAPI backend with OpenAPI documentation
-- **frontend**: Vite + React frontend
+- **frontend-dev**: Vite + React frontend (dev mode with hot-reload)
+- **frontend-prod**: Vite + React frontend (production build)
 
 ## Usage
 
@@ -25,9 +26,16 @@ This directory contains the Docker Compose configuration for the entire Comissã
    VITE_API_BASE_URL=http://localhost:8000
    ```
 
-2. Start all services:
+2. Start services using a **profile** to choose the frontend mode:
+
+   **Development** (hot-reload enabled — code changes reflect instantly):
    ```bash
-   docker-compose up --build
+   docker compose --profile dev up --build
+   ```
+
+   **Production** (optimized static build):
+   ```bash
+   docker compose --profile prod up --build
    ```
 
 3. Access the services:
@@ -36,9 +44,18 @@ This directory contains the Docker Compose configuration for the entire Comissã
    - API Documentation: http://localhost:8000/docs
    - Database: localhost:${MYSQL_PORT}
 
+## Profiles
+
+| Profile | Frontend service | Description |
+|---------|-----------------|-------------|
+| `dev`   | `frontend-dev`  | Vite dev server with HMR. Source code is mounted from the host, so edits are reflected instantly. |
+| `prod`  | `frontend-prod` | Pre-built static bundle served via `vite preview`. No volume mounts needed. |
+
+> **Note:** Both profiles use the same container name and port, so only one can run at a time.
+
 ## Notes
 
 - The `mysql_data` directory will be created automatically to persist database data
-- All services have hot-reload enabled for development
+- The API service has hot-reload enabled via `--reload` flag
+- The frontend in `dev` profile mounts `src/`, `public/`, and `index.html` for live editing
 - The frontend connects to the API using the configured `VITE_API_BASE_URL`
-

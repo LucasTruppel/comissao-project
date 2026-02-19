@@ -86,6 +86,8 @@ class SaleInfo(BaseModel):
     numero_protocolo: str
     valor_venda: float
     comissao: float
+    is_renovacao: bool = False
+    comissao_renovacao: float = 0.0
 
 class ContadorInfo(BaseModel):
     nome: str
@@ -93,6 +95,7 @@ class ContadorInfo(BaseModel):
     faixa_comissao: str
     total_vendas: float
     total_comissao: float
+    total_comissao_renovacao: float = 0.0
     vendas: List[SaleInfo] = []
 
 class SellerInfo(BaseModel):
@@ -101,5 +104,18 @@ class SellerInfo(BaseModel):
     faixa_comissao: str
     total_vendas: float
     total_comissao: float
+    total_comissao_renovacao: float = 0.0
     contadores: List[ContadorInfo] = []
     vendas: List[SaleInfo] = []
+
+class RenewalPartnerInfo(BaseModel):
+    nome: str
+    cnpj_cpf: str
+    faixa_comissao: str
+    total_vendas: float
+    total_comissao: float
+    sellers: List[SellerInfo] = []
+
+class ComissaoResponse(BaseModel):
+    sellers: List[SellerInfo]
+    parceiro_renovacao: Optional[RenewalPartnerInfo] = None

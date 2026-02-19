@@ -38,6 +38,8 @@ export interface SaleInfo {
   numero_protocolo: string;
   valor_venda: number;
   comissao: number;
+  is_renovacao: boolean;
+  comissao_renovacao: number;
 }
 
 export interface ContadorInfo {
@@ -46,6 +48,7 @@ export interface ContadorInfo {
   faixa_comissao: string;
   total_vendas: number;
   total_comissao: number;
+  total_comissao_renovacao: number;
   vendas: SaleInfo[];
 }
 
@@ -55,7 +58,22 @@ export interface SellerInfo {
   faixa_comissao: string;
   total_vendas: number;
   total_comissao: number;
+  total_comissao_renovacao: number;
   contadores: ContadorInfo[];
   vendas: SaleInfo[];
+}
+
+export interface RenewalPartnerInfo {
+  nome: string;
+  cnpj_cpf: string;
+  faixa_comissao: string;
+  total_vendas: number;
+  total_comissao: number;
+  sellers: SellerInfo[];
+}
+
+export interface ComissaoResponse {
+  sellers: SellerInfo[];
+  parceiro_renovacao: RenewalPartnerInfo | null;
 }
 
