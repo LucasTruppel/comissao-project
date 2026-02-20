@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import * as XLSX from 'xlsx';
 import { calcularComissao } from '../api';
 import type { SaleInfo, SellerInfo, RenewalPartnerInfo, ComissaoResponse } from '../types';
 import './Comissao.css';
@@ -16,6 +17,137 @@ function getDirectSales(seller: SellerInfo): SaleInfo[] {
     }
   }
   return seller.vendas.filter((v) => !contadorPedidos.has(v.numero_pedido));
+}
+
+/** Build sales rows for XLSX export from main sellers (all sales). */
+function buildSalesRows(sellers: SellerInfo[]): Record<string, string | number>[] {
+  const rows: Record<string, string | number>[] = [];
+  const headers = [
+    'Vendedor',
+    'Contador / Vendas Diretas',
+    'Nº Pedido',
+    'Nº Protocolo',
+    'Produto',
+    'Renovação',
+    'Valor Venda',
+    'Comissão do Vendedor',
+    'Comissão do Contador',
+    'Comissão de Renovação',
+  ];
+
+  for (const seller of sellers) {
+    const sellerComissaoMap = new Map<string, number>();
+    for (const v of seller.vendas) {
+      sellerComissaoMap.set(v.numero_pedido, v.comissao);
+    }
+
+    const directSales = getDirectSales(seller);
+    for (const sale of directSales) {
+      rows.push({
+        [headers[0]]: seller.nome,
+        [headers[1]]: 'Vendas Diretas',
+        [headers[2]]: sale.numero_pedido,
+        [headers[3]]: sale.numero_protocolo,
+        [headers[4]]: sale.produto ?? '',
+        [headers[5]]: sale.is_renovacao ? 'Sim' : 'Não',
+        [headers[6]]: sale.valor_venda,
+        [headers[7]]: sellerComissaoMap.get(sale.numero_pedido) ?? 0,
+        [headers[8]]: '',
+        [headers[9]]: sale.comissao_renovacao ?? 0,
+      });
+    }
+
+    for (const contador of seller.contadores) {
+      for (const sale of contador.vendas) {
+        const sellerComissao = sellerComissaoMap.get(sale.numero_pedido) ?? 0;
+        rows.push({
+          [headers[0]]: seller.nome,
+          [headers[1]]: contador.nome,
+          [headers[2]]: sale.numero_pedido,
+          [headers[3]]: sale.numero_protocolo,
+          [headers[4]]: sale.produto ?? '',
+          [headers[5]]: sale.is_renovacao ? 'Sim' : 'Não',
+          [headers[6]]: sale.valor_venda,
+          [headers[7]]: sellerComissao,
+          [headers[8]]: sale.comissao,
+          [headers[9]]: sale.comissao_renovacao ?? 0,
+        });
+      }
+    }
+  }
+  return rows;
+}
+
+/** Build summary rows for XLSX export. */
+function buildSummaryRows(sellers: SellerInfo[], parceiroRenovacao: RenewalPartnerInfo | null): Record<string, string | number>[] {
+  const rows: Record<string, string | number>[] = [];
+  const summaryHeaders = ['Nome', 'Tipo', 'Vendedor', 'Nº Vendas', 'Total Vendas', 'Comissão do Vendedor', 'Comissão do Contador', 'Comissão de Renovação'];
+
+  if (parceiroRenovacao) {
+    const totalVendas = parceiroRenovacao.sellers.reduce(
+      (acc, s) => acc + s.vendas.length + s.contadores.reduce((ca, c) => ca + c.vendas.length, 0),
+      0
+    );
+    rows.push({
+      [summaryHeaders[0]]: parceiroRenovacao.nome,
+      [summaryHeaders[1]]: 'Parceiro de Renovação',
+      [summaryHeaders[2]]: '',
+      [summaryHeaders[3]]: totalVendas,
+      [summaryHeaders[4]]: parceiroRenovacao.total_vendas,
+      [summaryHeaders[5]]: '',
+      [summaryHeaders[6]]: '',
+      [summaryHeaders[7]]: parceiroRenovacao.total_comissao,
+    });
+  }
+
+  for (const seller of [...sellers].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'))) {
+    rows.push({
+      [summaryHeaders[0]]: seller.nome,
+      [summaryHeaders[1]]: 'Vendedor',
+      [summaryHeaders[2]]: '',
+      [summaryHeaders[3]]: seller.vendas.length,
+      [summaryHeaders[4]]: seller.total_vendas,
+      [summaryHeaders[5]]: seller.total_comissao,
+      [summaryHeaders[6]]: '',
+      [summaryHeaders[7]]: seller.total_comissao_renovacao ?? 0,
+    });
+
+    for (const contador of seller.contadores) {
+      const contadorPedidos = new Set(contador.vendas.map((v) => v.numero_pedido));
+      const sellerComissaoOnContador = seller.vendas
+        .filter((v) => contadorPedidos.has(v.numero_pedido))
+        .reduce((acc, v) => acc + v.comissao, 0);
+
+      rows.push({
+        [summaryHeaders[0]]: contador.nome,
+        [summaryHeaders[1]]: 'Contador',
+        [summaryHeaders[2]]: seller.nome,
+        [summaryHeaders[3]]: contador.vendas.length,
+        [summaryHeaders[4]]: contador.total_vendas,
+        [summaryHeaders[5]]: sellerComissaoOnContador,
+        [summaryHeaders[6]]: contador.total_comissao,
+        [summaryHeaders[7]]: contador.total_comissao_renovacao ?? 0,
+      });
+    }
+  }
+  return rows;
+}
+
+function downloadAsXlsx(response: ComissaoResponse): void {
+  const wb = XLSX.utils.book_new();
+  const sellers = response.sellers ?? [];
+  const parceiroRenovacao = response.parceiro_renovacao ?? null;
+
+  const salesRows = buildSalesRows(sellers);
+  const wsSales = XLSX.utils.json_to_sheet(salesRows);
+  XLSX.utils.book_append_sheet(wb, wsSales, 'Vendas');
+
+  const summaryRows = buildSummaryRows(sellers, parceiroRenovacao);
+  const wsSummary = XLSX.utils.json_to_sheet(summaryRows);
+  XLSX.utils.book_append_sheet(wb, wsSummary, 'Resumo');
+
+  const fileName = `comissao-${new Date().toISOString().slice(0, 10)}.xlsx`;
+  XLSX.writeFile(wb, fileName);
 }
 
 export default function Comissao() {
@@ -584,6 +716,13 @@ export default function Comissao() {
           <div className="results-header">
             <h2>Resultados</h2>
             <div className="results-actions">
+              <button
+                className="btn-primary btn-sm"
+                onClick={() => response && downloadAsXlsx(response)}
+                disabled={!response || (results?.length === 0 && !parceiroRenovacao)}
+              >
+                Baixar XLSX
+              </button>
               <button className="btn-secondary btn-sm" onClick={expandVendedores}>
                 Expandir Vendedores
               </button>
