@@ -151,6 +151,12 @@ export default function Comissao() {
             <span className="sale-field-label">Protocolo</span>
             {sale.numero_protocolo}
           </span>
+          {sale.produto && (
+            <span className="sale-field">
+              <span className="sale-field-label">Produto</span>
+              {sale.produto}
+            </span>
+          )}
           {sale.is_renovacao && (
             <span className="tree-node-badge badge-renovacao">Renovação</span>
           )}

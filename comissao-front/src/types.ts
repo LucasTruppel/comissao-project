@@ -40,6 +40,7 @@ export interface SaleInfo {
   comissao: number;
   is_renovacao: boolean;
   comissao_renovacao: number;
+  produto: string;
 }
 
 export interface ContadorInfo {

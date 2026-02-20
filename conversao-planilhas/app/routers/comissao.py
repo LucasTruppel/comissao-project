@@ -159,6 +159,7 @@ def get_vendas_column_names(headers_map: Dict[str, str]) -> Dict[str, str]:
         'status_financeiro': get_header_name(headers_map, 'Status Financeiro'),
         'doc_vendedor': get_header_name(headers_map, 'Doc. Vendedor'),
         'usuario_criacao_pedido': get_header_name(headers_map, 'Usuário de Criação do pedido'),
+        'produto': get_header_name(headers_map, 'Produto'),
     }
 
 
@@ -176,7 +177,7 @@ def get_parceiros_column_names(headers_map: Dict[str, str]) -> Dict[str, str]:
 def validate_columns(vendas_cols: Dict[str, Optional[str]], parceiros_cols: Dict[str, Optional[str]]):
     """Validate that all required columns are present."""
     # usuario_criacao_pedido is optional (used for renewal detection)
-    optional_vendas = {'usuario_criacao_pedido'}
+    optional_vendas = {'usuario_criacao_pedido', 'produto'}
     missing_vendas = [k for k, v in vendas_cols.items() if v is None and k not in optional_vendas]
     missing_parceiros = [k for k, v in parceiros_cols.items() if v is None]
     
@@ -356,6 +357,9 @@ def process_sale(
     usuario_criacao_pedido = ""
     if vendas_cols.get('usuario_criacao_pedido'):
         usuario_criacao_pedido = row.get(vendas_cols['usuario_criacao_pedido'], "").strip()
+    produto = ""
+    if vendas_cols.get('produto'):
+        produto = row.get(vendas_cols['produto'], "").strip()
     
     # Filter by Status Financeiro
     if status_financeiro.upper() != "PAGO":
@@ -413,7 +417,8 @@ def process_sale(
             valor_venda=valor_venda,
             comissao=contador_commission,
             is_renovacao=sale_is_renovacao,
-            comissao_renovacao=sale_comissao_renovacao
+            comissao_renovacao=sale_comissao_renovacao,
+            produto=produto
         )
         
         contador.vendas.append(contador_sale_info)
@@ -436,7 +441,8 @@ def process_sale(
             valor_venda=valor_venda,
             comissao=seller_commission,
             is_renovacao=sale_is_renovacao,
-            comissao_renovacao=sale_comissao_renovacao
+            comissao_renovacao=sale_comissao_renovacao,
+            produto=produto
         )
         
         seller.vendas.append(seller_sale_info)
@@ -465,7 +471,8 @@ def process_sale(
             valor_venda=valor_venda,
             comissao=seller_commission,
             is_renovacao=sale_is_renovacao,
-            comissao_renovacao=sale_comissao_renovacao
+            comissao_renovacao=sale_comissao_renovacao,
+            produto=produto
         )
         
         # Add to seller
