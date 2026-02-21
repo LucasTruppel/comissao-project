@@ -163,6 +163,24 @@
   background: #545b62;
 }
 
+.btn-download-xlsx {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  border: 1px solid #042552;
+  border-radius: 4px;
+  background: #fff;
+  color: #042552;
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.btn-download-xlsx:hover {
+  background: #042552;
+  color: white;
+}
+
 /* --- Tree --- */
 
 .tree {
@@ -360,6 +378,24 @@
 
 .sale-header:hover {
   background: #f8f9fa;
+}
+
+.sale-header.tree-node-header {
+  align-items: flex-start;
+}
+
+.sale-node-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  align-items: flex-start;
+}
+
+.sale-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  flex-wrap: wrap;
 }
 
 .sale-field {

@@ -41,6 +41,8 @@ export interface SaleInfo {
   is_renovacao: boolean;
   comissao_renovacao: number;
   produto: string;
+  cliente?: string;
+  doc_cliente?: string;
 }
 
 export interface ContadorInfo {

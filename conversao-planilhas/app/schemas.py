@@ -89,6 +89,8 @@ class SaleInfo(BaseModel):
     is_renovacao: bool = False
     comissao_renovacao: float = 0.0
     produto: str = ""
+    cliente: str = ""
+    doc_cliente: str = ""
 
 class ContadorInfo(BaseModel):
     nome: str

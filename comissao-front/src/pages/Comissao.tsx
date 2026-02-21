@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { calcularComissao } from '../api';
-import type { SaleInfo, SellerInfo, RenewalPartnerInfo, ComissaoResponse } from '../types';
+import type { SaleInfo, SellerInfo, ContadorInfo, RenewalPartnerInfo, ComissaoResponse } from '../types';
 import './Comissao.css';
 
 function formatCurrency(value: number): string {
@@ -133,6 +133,28 @@ function buildSummaryRows(sellers: SellerInfo[], parceiroRenovacao: RenewalPartn
   return rows;
 }
 
+function sanitizeFileName(name: string): string {
+  return name.replace(/[^a-zA-Z0-9\u00C0-\u024F\s-]/g, '').replace(/\s+/g, '-').slice(0, 50);
+}
+
+function autoSizeColumns(ws: XLSX.WorkSheet): void {
+  if (!ws || !ws['!ref']) return;
+  const range = XLSX.utils.decode_range(ws['!ref']);
+  const colWidths: { wch: number }[] = [];
+  for (let C = range.s.c; C <= range.e.c; C++) {
+    let maxLen = 10;
+    for (let R = range.s.r; R <= range.e.r; R++) {
+      const cell = ws[XLSX.utils.encode_cell({ r: R, c: C })];
+      if (cell && cell.v != null) {
+        const s = typeof cell.v === 'number' ? String(cell.v) : String(cell.v);
+        maxLen = Math.max(maxLen, Math.min(s.length + 1, 60));
+      }
+    }
+    colWidths.push({ wch: maxLen });
+  }
+  ws['!cols'] = colWidths;
+}
+
 function downloadAsXlsx(response: ComissaoResponse): void {
   const wb = XLSX.utils.book_new();
   const sellers = response.sellers ?? [];
@@ -140,13 +162,86 @@ function downloadAsXlsx(response: ComissaoResponse): void {
 
   const salesRows = buildSalesRows(sellers);
   const wsSales = XLSX.utils.json_to_sheet(salesRows);
+  autoSizeColumns(wsSales);
   XLSX.utils.book_append_sheet(wb, wsSales, 'Vendas');
 
   const summaryRows = buildSummaryRows(sellers, parceiroRenovacao);
   const wsSummary = XLSX.utils.json_to_sheet(summaryRows);
+  autoSizeColumns(wsSummary);
   XLSX.utils.book_append_sheet(wb, wsSummary, 'Resumo');
 
   const fileName = `comissao-${new Date().toISOString().slice(0, 10)}.xlsx`;
+  XLSX.writeFile(wb, fileName);
+}
+
+function downloadSellerXlsx(seller: SellerInfo, _showRenewalComissao = false): void {
+  const wb = XLSX.utils.book_new();
+  const salesRows = buildSalesRows([seller]);
+  const wsSales = XLSX.utils.json_to_sheet(salesRows);
+  autoSizeColumns(wsSales);
+  XLSX.utils.book_append_sheet(wb, wsSales, 'Vendas');
+  const summaryRows = buildSummaryRows([seller], null);
+  const wsSummary = XLSX.utils.json_to_sheet(summaryRows);
+  autoSizeColumns(wsSummary);
+  XLSX.utils.book_append_sheet(wb, wsSummary, 'Resumo');
+  const fileName = `comissao-vendedor-${sanitizeFileName(seller.nome)}-${new Date().toISOString().slice(0, 10)}.xlsx`;
+  XLSX.writeFile(wb, fileName);
+}
+
+function downloadContadorXlsx(seller: SellerInfo, contador: ContadorInfo, _showRenewalComissao = false): void {
+  const wb = XLSX.utils.book_new();
+  const headers = [
+    'Vendedor',
+    'Contador / Vendas Diretas',
+    'Nº Pedido',
+    'Nº Protocolo',
+    'Produto',
+    'Renovação',
+    'Valor Venda',
+    'Comissão do Contador',
+  ];
+  const salesRows = contador.vendas.map((sale: SaleInfo) => ({
+    [headers[0]]: seller.nome,
+    [headers[1]]: contador.nome,
+    [headers[2]]: sale.numero_pedido,
+    [headers[3]]: sale.numero_protocolo,
+    [headers[4]]: sale.produto ?? '',
+    [headers[5]]: sale.is_renovacao ? 'Sim' : 'Não',
+    [headers[6]]: sale.valor_venda,
+    [headers[7]]: sale.comissao,
+  }));
+  const wsSales = XLSX.utils.json_to_sheet(salesRows);
+  autoSizeColumns(wsSales);
+  XLSX.utils.book_append_sheet(wb, wsSales, 'Vendas');
+  const summaryHeaders = ['Nome', 'Tipo', 'Vendedor', 'Nº Vendas', 'Total Vendas', 'Comissão do Contador'];
+  const summaryRows = [
+    {
+      [summaryHeaders[0]]: contador.nome,
+      [summaryHeaders[1]]: 'Contador',
+      [summaryHeaders[2]]: seller.nome,
+      [summaryHeaders[3]]: contador.vendas.length,
+      [summaryHeaders[4]]: contador.total_vendas,
+      [summaryHeaders[5]]: contador.total_comissao,
+    },
+  ];
+  const wsSummary = XLSX.utils.json_to_sheet(summaryRows);
+  autoSizeColumns(wsSummary);
+  XLSX.utils.book_append_sheet(wb, wsSummary, 'Resumo');
+  const fileName = `comissao-contador-${sanitizeFileName(contador.nome)}-${new Date().toISOString().slice(0, 10)}.xlsx`;
+  XLSX.writeFile(wb, fileName);
+}
+
+function downloadRenewalPartnerXlsx(rp: RenewalPartnerInfo): void {
+  const wb = XLSX.utils.book_new();
+  const salesRows = buildSalesRows(rp.sellers);
+  const wsSales = XLSX.utils.json_to_sheet(salesRows);
+  autoSizeColumns(wsSales);
+  XLSX.utils.book_append_sheet(wb, wsSales, 'Vendas');
+  const summaryRows = buildSummaryRows(rp.sellers, rp);
+  const wsSummary = XLSX.utils.json_to_sheet(summaryRows);
+  autoSizeColumns(wsSummary);
+  XLSX.utils.book_append_sheet(wb, wsSummary, 'Resumo');
+  const fileName = `comissao-parceiro-renovacao-${sanitizeFileName(rp.nome)}-${new Date().toISOString().slice(0, 10)}.xlsx`;
   XLSX.writeFile(wb, fileName);
 }
 
@@ -274,21 +369,31 @@ export default function Comissao() {
   const renderSale = (sale: SaleInfo, sellerComissao?: number, showRenewalComissao?: boolean) => (
     <div key={sale.numero_pedido} className="tree-node tree-sale">
       <div className="tree-node-header sale-header">
-        <div className="tree-node-info">
-          <span className="sale-field">
-            <span className="sale-field-label">Pedido</span>
-            {sale.numero_pedido}
-          </span>
-          <span className="sale-field">
-            <span className="sale-field-label">Protocolo</span>
-            {sale.numero_protocolo}
-          </span>
-          {sale.produto && (
+        <div className="tree-node-info sale-node-info">
+          <div className="sale-line sale-line-1">
+            <span className="sale-field">
+              <span className="sale-field-label">Pedido</span>
+              {sale.numero_pedido}
+            </span>
+            <span className="sale-field">
+              <span className="sale-field-label">Protocolo</span>
+              {sale.numero_protocolo}
+            </span>
             <span className="sale-field">
               <span className="sale-field-label">Produto</span>
-              {sale.produto}
+              {sale.produto || '-'}
             </span>
-          )}
+          </div>
+          <div className="sale-line sale-line-2">
+            <span className="sale-field">
+              <span className="sale-field-label">Cliente</span>
+              {sale.cliente || '-'}
+            </span>
+            <span className="sale-field">
+              <span className="sale-field-label">Doc. Cliente</span>
+              {sale.doc_cliente || '-'}
+            </span>
+          </div>
           {sale.is_renovacao && (
             <span className="tree-node-badge badge-renovacao">Renovação</span>
           )}
@@ -390,6 +495,17 @@ export default function Comissao() {
                 </span>
               </div>
             )}
+            <button
+              type="button"
+              className="btn-download-xlsx"
+              onClick={(e) => {
+                e.stopPropagation();
+                downloadSellerXlsx(seller, showRenewalComissao);
+              }}
+              title="Baixar XLSX"
+            >
+              XLSX
+            </button>
           </div>
         </div>
 
@@ -540,6 +656,17 @@ export default function Comissao() {
                           </span>
                         </div>
                       )}
+                      <button
+                        type="button"
+                        className="btn-download-xlsx"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          downloadContadorXlsx(seller, contador, showRenewalComissao);
+                        }}
+                        title="Baixar XLSX"
+                      >
+                        XLSX
+                      </button>
                     </div>
                   </div>
 
@@ -609,6 +736,17 @@ export default function Comissao() {
                 {formatCurrency(rp.total_comissao)}
               </span>
             </div>
+            <button
+              type="button"
+              className="btn-download-xlsx"
+              onClick={(e) => {
+                e.stopPropagation();
+                downloadRenewalPartnerXlsx(rp);
+              }}
+              title="Baixar XLSX"
+            >
+              XLSX
+            </button>
           </div>
         </div>
 
